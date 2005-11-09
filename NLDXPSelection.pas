@@ -1,29 +1,47 @@
-unit Unit2;
+unit NLDXPSelection;
 
 interface
 
 uses
-  Windows, Classes, Controls, Forms;
+  Windows, Classes, Messages;
 
 type
-  TXPSelection = class(TComponent)
+  TNLDXPSelection = class(TComponent)
   public
-    constructor Create(AOwnerAndParent: TCustomForm); reintroduce;
+    constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure Start(MaxBounds: TRect);
   end;
 
+  TWMXPSelect = packed record
+    Msg: Cardinal;
+    TopLeft: TSmallPoint;
+    BottomRight: TSmallPoint;
+    Result: LongInt;
+  end;
+
+const
+  WM_XPSELECTIONMOVE = WM_APP + 13294;
+  WM_XPSELECTIONFINISH = WM_APP + 13295;
+
+procedure Register;
+
 implementation
 
 uses
-  Graphics, Math, Messages;
+  Forms, Graphics, Math, Controls, SysUtils;
+
+procedure Register;
+begin
+  RegisterComponents('NLDelphi', [TNLDXPSelection]);
+end;
 
 type
   TXPSelectionControl = class(TCustomControl)
   private
     MaxBounds: TRect;
-    procedure WMEraseBkgnd(var Message: TWmEraseBkgnd); message WM_ERASEBKGND;
-    procedure WMPaint(var Message: TWMPaint); message WM_PAINT;
+    procedure WMEraseBkgnd(var Msg: TWmEraseBkgnd); message WM_ERASEBKGND;
+    procedure WMPaint(var Msg: TWMPaint); message WM_PAINT;
     procedure MouseMove(Shift: TShiftState; X, Y: Integer); override;
     procedure MouseUp(Button: TMouseButton; Shift: TShiftState; X,
       Y: Integer); override;
@@ -42,58 +60,72 @@ var
   P1: TPoint;
   P2: TPoint;
 
-constructor TXPSelection.Create(AOwnerAndParent: TCustomForm);
+constructor TNLDXPSelection.Create(AOwner: TComponent);
 begin
-  inherited Create(AOwnerAndParent);
-  Form := AOwnerAndParent;
-  Control := TXPSelectionControl.Create(Self);
-  Control.Parent := Form;
-  BackGround := TBitmap.Create;
-  ForeGround := TBitmap.Create;
-  with ForeGround do begin
-    Width := Screen.Width;
-    Height := Screen.Height;
-    Canvas.Brush.Color := clHighLight;
-    Canvas.FillRect(Rect(0, 0, Screen.Width, Screen.Height));
+  inherited;
+  if AOwner is TCustomForm then
+  begin
+    Form := TCustomForm(AOwner);
+    Control := TXPSelectionControl.Create(Self);
+    Control.Parent := Form;
+    BackGround := TBitmap.Create;
+    ForeGround := TBitmap.Create;
+    with ForeGround do
+    begin
+      Width := Screen.Width;
+      Height := Screen.Height;
+      Canvas.Brush.Color := clHighLight;
+      Canvas.FillRect(Rect(0, 0, Screen.Width, Screen.Height));
+    end;
+    with BlendFunc do
+    begin
+      BlendOp := AC_SRC_OVER;
+      BlendFlags := 0;
+      SourceConstantAlpha := 80;
+      AlphaFormat := 0;
+    end;
+    MemDC := CreateCompatibleDC(Control.Canvas.Handle);
+    MemPen := CreatePen(PS_SOLID, 1, ColorToRGB(clHighLight));
+    SelectObject(MemDC, MemPen);
   end;
-  with BlendFunc do begin
-    BlendOp := AC_SRC_OVER;
-    BlendFlags := 0;
-    SourceConstantAlpha := 60;
-    AlphaFormat := 0;
-  end;
-  MemDC := CreateCompatibleDC(Control.Canvas.Handle);
-  MemPen := CreatePen(PS_SOLID, 1, ColorToRGB(clHighLight));
-  SelectObject(MemDC, MemPen);
 end;
 
-destructor TXPSelection.Destroy;
+destructor TNLDXPSelection.Destroy;
 begin
-  DeleteObject(MemPen);
-  DeleteDC(MemDC);
-  ForeGround.Free;
-  BackGround.Free;
+  if Assigned(Form) then
+  begin
+    DeleteObject(MemPen);
+    DeleteDC(MemDC);
+    ForeGround.Free;
+    BackGround.Free;
+  end;
   inherited;
 end;
 
-procedure TXPSelection.Start(MaxBounds: TRect);
+procedure TNLDXPSelection.Start(MaxBounds: TRect);
 begin
-  if not Control.MouseCapture then begin
-    P1 := Form.ScreenToClient(Mouse.CursorPos);
-    with MaxBounds do begin
-      Left := Max(Left, 0);
-      Top := Max(Top, 0);
-      Right := Min(Right, Form.ClientRect.Right);
-      Bottom := Min(Bottom, Form.ClientRect.Right);
+  if not Assigned(Form) then
+    raise Exception.CreateFmt(
+      'XPSelection ''%s'' must be owned by a TCustomForm', [Name])
+  else
+    if not Control.MouseCapture then
+    begin
+      P1 := Form.ScreenToClient(Mouse.CursorPos);
+      with MaxBounds do
+      begin
+        Left := Max(Left, 0);
+        Top := Max(Top, 0);
+        Right := Min(Right, Form.ClientRect.Right);
+        Bottom := Min(Bottom, Form.ClientRect.Right);
+      end;
+      Control.MaxBounds := MaxBounds;
+      BackGround.Width := Form.ClientWidth;
+      BackGround.Height := Form.ClientHeight;
+      BackGround.Canvas.CopyRect(Form.ClientRect, Form.Canvas, Form.ClientRect);
+      Control.BringToFront;
+      Form.DisableAlign;
+      Control.MouseCapture := True;
     end;
-    Control.MaxBounds := MaxBounds;
-    BackGround.Width := Form.ClientWidth;
-    BackGround.Height := Form.ClientHeight;
-    BackGround.Canvas.CopyRect(Form.ClientRect, Form.Canvas, Form.ClientRect);
-    Control.BringToFront;
-    Form.DisableAlign;
-    Control.MouseCapture := True;
-  end;
 end;
 
 { TXPSelectionControl }
@@ -106,11 +138,15 @@ begin
   if (Abs(P1.X - P2.X) > Mouse.DragThreshold) or
     (Abs(P1.Y - P2.Y) > Mouse.DragThreshold) then
       Show;
-  if Visible then begin
+  if Visible then
+  begin
     SetBounds(Min(P1.X, P2.X), Min(P1.Y, P2.Y),
               Abs(P1.X - P2.X), Abs(P1.Y - P2.Y));
     Form.Update;
   end;
+  PostMessage(Form.Handle, WM_XPSELECTIONMOVE,
+    LongInt(PointToSmallPoint(Point(Left, Top))),
+    LongInt(PointToSmallPoint(Point(Left + Width, Top + Height))));
 end;
 
 procedure TXPSelectionControl.MouseUp(Button: TMouseButton;
@@ -119,14 +155,17 @@ begin
   MouseCapture := False;
   Hide;
   Form.EnableAlign;
+  PostMessage(Form.Handle, WM_XPSELECTIONFINISH,
+    LongInt(PointToSmallPoint(Point(Left, Top))),
+    LongInt(PointToSmallPoint(Point(Left + Width, Top + Height))));
 end;
 
-procedure TXPSelectionControl.WMEraseBkgnd(var Message: TWmEraseBkgnd);
+procedure TXPSelectionControl.WMEraseBkgnd(var Msg: TWmEraseBkgnd);
 begin
-  Message.Result := 1;
+  Msg.Result := 1;
 end;
 
-procedure TXPSelectionControl.WMPaint(var Message: TWMPaint);
+procedure TXPSelectionControl.WMPaint(var Msg: TWMPaint);
 var
   MemBitmap: HBITMAP;
 begin
@@ -144,6 +183,7 @@ begin
       ForeGround.Canvas.Handle, 0, 0, Width - 2, Height - 2,
       BlendFunc);
     BitBlt(Canvas.Handle, 0, 0, Width, Height, MemDC, 0, 0, SRCCOPY);
+    Form.Caption := IntToStr(Canvas.Pixels[1, 1]);
   finally
     DeleteObject(MemBitmap);
   end;
